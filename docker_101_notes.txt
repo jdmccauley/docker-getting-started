@@ -1,0 +1,404 @@
+Docker 101 Notes
+
+Opened Windows Powershell and ran the following command: 
+docker run -dp 80:80 docker/getting-started
+	-d: This runs the docker container in detached mode (in background)
+	-p 80:80: this maps port 80 of host to port 80 of container
+	docker/getting-started: the image to use
+Start application by entering http://localhost
+
+Docker Dashboard
+This shows the running containers, which in this case should only be the container
+	for the tutorial. The name is randomly generated for this, and mine is called
+	'thirsty_feynman'
+
+What is a container?
+A container is a process on the machine that has been isolated from all other
+	processes on the host machine.
+So is it a virtual machine?
+The isolation uses kernal namespaces and cgroups, which have been part of Linux
+	for a long time. Time to read on those.
+	Kernel namespace = feature that partitions the kernel resources so processes have their
+		own sets of resources
+	cgroups = 'control groups', this is a linux kernel feature that limits, accounts for,
+		and isolates resource usage (CPU, memory, disk IO, network...) of a collection
+		of processes.
+	So from what I understand, these are linux features that separate off computational resources
+		to select processes, which in this case can be a container. The container runs with these features,
+		and the container itself contains all necessary dependencies to run the process.
+Docker makes the capabilities of kernal namespaces and cgroups easy to use.
+
+What is a container image?
+When you run a container, it uses an isolated file system, and the system is provided by the 
+	container image.
+The image contains the container's file system, it must contain all things to run the application, such as
+	all depencencies, configuration, script, binaries...
+The image also has other configurations like environment variables, default commands, and more metadata.
+This file system is isolated from the rest of the OS.
+
+Section: Our Application
+This gives an example of using a container.
+The app is a simple todo list manager in Node.js
+Download the zip file and open the package.json in a text editor.
+See the 'app' folder I extracted.
+	There should be two sub directories named src and spec.
+
+This directory does not have a Dockerfile, and the tutorial says to save the following
+	in a file named Dockerfile (no file extension)
+FROM node:12-alpine
+WORKDIR /app
+COPY . .
+RUN yarn install --production
+CMD ["node", "/app/src/index.js"]
+
+Then run the container image by running the following command when in the app directory
+docker build -t getting-started .
+
+Explanation:
+The builder was instructed to start from the node:12-alpine image (this was downloaded during the command)
+The working directory needed to be /app
+yarn was used to install the application's dependencies as listed in package.json
+The CMD told the default command to run when starting the container.
+The -t flag tags the image so the container can be refered to 'getting-started' instead of the sha256 hash.
+
+Starting the app container
+Run the following command:
+docker run -dp 3000:3000 getting-started
+This runs the container in the detatched mode on the host's port 3000 to the container port 8000.
+	Without port mapping, you can't access the application.
+Now the application can be seen at http://localhost:3000
+What is a port?
+
+Now to learn about modifying the app and updating the running application.
+
+Section - Updating our app
+Change the empty text in the app to say "You have no todo items yet! Add one above!"
+	instead of "No items yet! Add one above!".
+Go to src/static/js/app.js, change the text in line 56. Save.
+Try to build and run again.
+Build worked, run failed.
+This is because the old container is still running.
+Here's how to stop and remove the old container:
+docker ps
+docker stop [container id retreived from docker ps]
+docker rm [container id]
+
+Note that the container id is a checksum, so you can enter just a few characters and the command will run on the right container.
+Now the docker run works on port 3000. That is how you update a container and run it again with the changes.
+You must stop the previous container, remove it, and then build and run the new container (the updated one).
+For reference, you can stop and remove a container with the following:
+	docker rm -f [container id]
+
+
+Now to check. I made a github repo called docker-getting-started.
+It worked great!
+Posting containers on a repo is a great way to share them!
+
+Section - Persisting our DB
+The container filesystem has its own "scratch space" for files, and those files can be used when the container is running.
+Once stopped, the files in the container aren't saved and seen in the next container run.
+Testing that:
+docker run -d ubuntu bash -c "shuf -i 1-1000 -n 1 -o /data.txt && tail -f /dev/null"
+This saves a random number to data.txt in an ubuntu container, and keeps the container running (in the second command, the one after &&)
+Now run the command below to see the file in the container:
+docker exec [container id for the ubuntu container] cat /data.txt
+I see a random number. Now run the container with the same image and see that the file does not exist:
+docker run -it ubuntu ls /
+It's not there, even though it's the same container!
+Now remove the ubuntu container. 
+
+So, containers start from the image definition. All changes to the container
+	are kept to that container and lost when container is removed.
+Volumes change this.
+Volumes allow you to connect container file systems to host machine file systems.
+	If the container directory is mounted, changes there will be seen in the host machine.
+	Note that this is different than making changes within the container with container commands.
+	This is why I was able to change the code in the app.js file.
+There are two types of volumes, first is 'named volumes'.
+
+For the case of this app, the data is stored in the following location:
+/etc/todos/todo.db
+This is a SQLite Database.
+If we 'persist' the file onto the host and give the next container access to it, the changes should be seen.
+If we make a volume and attach it to the directory of the data, the data will persist through containers.
+Changes to todo.db will be persisted to the host in the volume (my machine?).
+In a nutshell, a named volume is a bucker of data, and the container uses a pointer to the host volume disk location when running.
+Here's how to make a volume:
+docker volume create [name]
+In this case, let's use 'todo-db' as the name.
+When you want to use the volume, you specify it when doing docker run:
+docker run -dp 3000:3000 -v todo-db:/etc/todos getting-started
+	-v = this is the volume flag, and it says to use the volume
+		todo-db, and mount it to the /etc/todos directory in the container
+	This now saves the data from the container run into that volume, which
+		can be accessed on the host since volumes are mounted on the host.
+I added some items in the volume, then stopped/removed the container.
+	When I ran the container again with the volume, the items were still there!
+But where is the volume stored on my computer? I can't find it.
+Use the following command to find the data:
+docker volume inspect [volume_name]
+
+I ran that for todo-db, and here is the output:
+[
+    {
+        "CreatedAt": "2020-05-11T07:25:15Z",
+        "Driver": "local",
+        "Labels": {},
+        "Mountpoint": "/var/lib/docker/volumes/todo-db/_data",
+        "Name": "todo-db",
+        "Options": {},
+        "Scope": "local"
+    }
+]
+I can't access the directory because of permissions, but I trust that it's there. (must be root to see the file location)
+The Mountpoint is the location on the disk where the data is stored.
+So in conclusion, docker volumes allow you to make local file systems to run in containers.
+
+Side note:
+When running Docker Desktop on Windows, the Docker commands actually run in a small VM.
+To see the contents of the Mountpoint, you need to get into the VM.
+
+Section - Using Bind Mounts
+Volumes are great, but they can also be set to a specific location.
+This is useful for persisting data, but also for making changes to the actual container.
+When you bind mount, this can also make the app update automatically with changes to the volume.
+This is great since you can get around stopping, removing, building, and running a container each time a change is made.
+
+For Node-based applications, nodemon is a great tool for watching file changes and restarting the application.
+There are other tools in other languages and frameworks.
+
+To run the container in a development workflow, we'll do the following:
+1. Mound the source code to the container
+2. Install all dependencies, including 'dev'
+3. Start nodemon to watch for filesystem changes
+
+Here's how we'll do it:
+1. Stop all 'getting-started' containers
+2. Run the following:
+docker run -dp 3000:3000 -w /app -v ${PWD}:/app node:12-alpine sh -c "yarn install && yarn run dev"
+
+What the command means:
+	-dp 3000:3000 = run detatched at port 3000 host and create a port mapping
+	-w /app = set working directory that command runs from
+	node:12-alpine = image to use
+	sh -c "yarn install && yarn run dev" = starting shell (alpine does not have bash) and run yarn install (install all dependencies)
+		and run 'yarn run dev'. See that package.json has 'dev' script starts nodemon.
+3. Run the following:
+docker logs -f [container id]
+4. Once the log reads "Listening on port [port you ran to]", exit the shell with ctrl+c
+5. Make live changes.	
+
+Test change:
+Go to /src/static/js/app.js, change "Add Item" button to just say "Add" in line 109.
+Upon refresh of localhost:3000, change was seen!
+
+To stop the container and build image, run 'docker build -t getting-started'.
+Docker Compose makes this setup easier, but for now, these bind mounts make development FAST.
+
+Section - Multi-Container Apps
+Note: I tried to docker build again, it did not work. I deleted the 'node_modules' folder in the /app/ directory since it wasn't present yesterday, and
+	the build worked.
+Now we're going with the idea that the SQLite database is not going to work, so we need to use MySQL.
+We're going to install MySQL in another container, so now we'll have two containers for this application.
+This is the general mantra for containers:
+	"Each container should do one thing and do it well."
+Ideally, keep each process in its own container so they can be modified independently of other containers.
+Keeping many containers and keeping them seperate provides a number of benefits:
+	1. Scaling APIs and frontend will likeley be different than the backend
+	2. Separate containers allows for version control in isolation
+	3. It's good practice to ship the database container seperate from the rest of the app
+		This lets you use another machine to run the database container separate from the other containers
+	4. Running many processes from one container may require a process manager, which can get complicated.
+So for now, we'll have a container for the app, and a container for the MySQL database.
+
+Container Networking
+Containers run in isolation, so networking is how they communicate.
+Thankfully, if two containers are on the same network, then they can communicate with each other.
+As long as that is true, the containers can work together.
+	Otherwise, they cannot.
+
+Starting MySQL
+There are two ways to put a container on a network:
+1. Assign it at start
+2. Connect to an existing container
+For this case, we'll create a network for the todo app and then connect a MySQL container to it.
+Making the network:
+docker network create todo-app
+	This makes a network with the todo-app container.
+Now to start a MySQL container and add it to the network:
+docker run -d --network todo-app --network-alias mysql -v todo-mysql-data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=todos mysql:5.7	--network-alias mysql = This gives the network an alias of mysql?
+	todo-mysql-data = This is a volume and it is mounted at /var/lib/mysql.
+		MySQL will then store its data here, in a bind mount.
+		'docker volume create' happens automatically here.
+To confirm the container is working:
+docker exec -it [container id] mysql -p
+	I was prompted for a password, which was "secret" as specified above.
+Now within the mysql shell, run 'SHOW DATABASES;' to show the database. 'todos' should be seen.
+That was how to see databases in a MySQL container!
+The database container 'mysql' is now running.
+
+Connecting to MySQL
+Now that the MySQL container is running, we need to find it and run it with the app.
+Note that each container has its own IP address.
+We'll use the nicolaka/netshoot container to check out the networking status.
+	This is a great publicly available container for network troubleshooting.
+docker run -it --network todo-app nicolaka/netshoot
+Once in this container, run the following:
+	dig mysql
+		This looks up the IP address and hostname for mysql.
+The output:
+; <<>> DiG 9.14.8 <<>> mysql
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 38048
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+
+;; QUESTION SECTION:
+;mysql.                         IN      A
+
+;; ANSWER SECTION:
+mysql.                  600     IN      A       172.21.0.2
+
+;; Query time: 0 msec
+;; SERVER: 127.0.0.11#53(127.0.0.11)
+;; WHEN: Tue May 12 23:05:04 UTC 2020
+;; MSG SIZE  rcvd: 44
+
+This means the mysql container is running at 172.21.0.2
+The 'mysql' is the hostname, which isn't a normal hostname.
+	It is the hostname here because of the '--network-alias' we did earlier!
+
+Running the app with MySQL:
+The todo app supports MySQL as it was written, it just needs the following:
+	MYSQL_HOST = hostname
+	MYSQL_USER = username for the connection
+	MYSQL_PASSWORD = password for the connection
+	MYSQL_DB = database to use when connected
+Now to run the following to set that:
+docker run -dp 3000:3000 \
+  -w /app -v ${PWD}:/app \
+  --network todo-app \
+  -e MYSQL_HOST=mysql \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=secret \
+  -e MYSQL_DB=todos \
+  node:12-alpine \
+  sh -c "yarn install && yarn run dev"
+
+Now checking the log to see that the network is connected to the mysql database:
+docker logs [container id for the network]
+Result:
+...
+Connected!
+Connected to mysql db at host mysql
+...
+
+Now to open the app and add a few items. Then we will connect the the mysql database to see if the app is writing to it.
+docker exec -it [mysql container id, not the network] mysql -p todos
+This should get into the mysql database. Now run the query:
+select * from todo_items;
+
+Output:
++--------------------------------------+-------+-----------+
+| id                                   | name  | completed |
++--------------------------------------+-------+-----------+
+| 5a79091a-cf3c-4f66-8069-13f474e2f44d | milk  |         0 |
+| 63e71238-78a3-4adf-a013-cd8012cb0185 | eggs  |         0 |
+| 22fcb86b-c792-44b2-8dc3-490ed05edde1 | flour |         1 |
++--------------------------------------+-------+-----------+
+
+In the docker application, there are two containers shown to be running: the mysql container and the app container with node12.
+The two containers are connected, but there is no indication that they are within the application.
+Docker-compose allows you to make 'stacks' of containers that are running together, more on that next.
+So far, we made a network, started containers, specified all environment variables, and exposed ports.
+We also saw how to perform service discovery using DNS (domain name system).
+
+Section - Using Docker Compose
+Docker Compose is a tool to define and share multi-container applications.
+With Compose, we create a YAML file to define the services with a single command to start up or turn down the entire application.
+Compose lets you define an application stack in a file, and keep the file at the root of the project repo.
+	This lets someone clone the repo and start the app quickly with Compose.
+
+Creating the Compose File
+At the root of the app, make a file named docker-compose.yml (can be any name really).
+The yml file needs the following written in it:
+	1. Schema version
+		example: 'version: "3.7"'
+	2. List of services (containers)
+		example: see the file in 'app'
+	Note that this is similar to the command we used to start the mysql app.
+	The services takes a name for the service. That will become the network alias. In this case we use "app"
+	You typically also include an image. In this case we use 'node:12-alpine'
+	Next you include commands.
+	To follow, ports.
+	Other things to add:
+		working directory
+		volume
+		environment
+Add the mysql service for the docker-compose.yml file alongside the 'app' service.
+Note that in the command where we set up mysql before, we automatically made a volume for 'todo-mysql-data'.
+	Docker Compose cannot do that, so I had to specify a volume to create in the yml file.
+NOTE: Docker Compose files use two spaces for 'tabs'.
+
+Once the docker-compose.yml file is made, the command can be run, as long as the app/db containers from before are not running:
+	docker-compose up -d
+		This performs docker-compose with the docker-compose.yml file and runs the container stack detatched.
+The app should now be up.
+Running the following command (note the -f flag) shows the log and 'follows' the log to show a live stream of app output.
+	docker-compose logs -f [container_name, if desired]
+	You can run the same command with a option for the container at the end to show logs for just the container.
+It's all running! Now I can run the following commands to see the items in the database:
+docker exec -it [mysql container id] mysql -p todos
+select * from todo_items;
+
+Note that 'docker ps' shows the containers running separately, but in the docker app they're shown as a stack!
+The name of the stack is the name of the directory that docker-compose.yml was written in.
+
+To take down the docker-compose, run:
+	docker-compose down
+Note that the volume is not deleted when this is done. If you want to delete the volume, run:
+	docker-compose down --volumes
+
+Section - Image Building Best Practices
+When you check what makes up a container image with
+	docker image history [container name]
+you notice that there is a line for each line in the DockerFile.
+Each line represents a layer of the image, so for 'getting-started' we have 4 images as per the DockerFile.
+Since the image depends on all layers, this occurs when you change only one layer:
+	"Once a layer changes, all downstream layers have to be recreated as well".
+This means that one change requires a build of the whole image again.
+Unfortunately, the way we wrote the DockerFile for 'getting-started' included all yarn dependencies to be installed.
+	There is a way around this.
+Since for Node-based applications, the dependencies are included in the package.json file, we can call that file.
+	We can call the file such that we only recreate the yarn depencencies if there is a change to the dependencies in package.json.
+To do this, add the collowing line to the DockerFile, before the 'RUN yarn install --production' line:
+	COPY package.json yarn.lock ./
+	Also move the original 'COPY . .' line to below the 'RUN yarn...' line.
+Now if I build, and then make a change, it should take less time to build.
+For example, change /src/static/index.html to change <title> to "The Best Todo App".
+	Runnig the build took much less time now!
+	This is because the build was using cache. 
+
+Multi-Stage Builds
+You can use multiple stages to build an image, and this can be helpful to:
+	separate build time dependencies from runtime dependencies
+	reduce overall image size by shipping only what the app needs to run
+For example, this DockerFile calls for a 'build' stage to build a Java app using Maven, and then the second stage,
+	'tomcat', copiesthe build stage. The final image is the last stage.
+Example:
+FROM maven AS build
+WORKDIR /app
+COPY . .
+RUN mvn package
+
+FROM tomcat
+COPY --from=build /app/target/file.war /usr/local/tomcat/webappe
+
+This helps have one container do the build, and another container serve as a copy of the build output.
+
+Section - What's Next?
+Container Orchestration is a topic to learn about.
+	This gives you a "manager" who recieves an 'expected state', such as 'run two instances of app and expose port 80'.
+	The managers look at the machine and delegate work to 'worker' nodes, watch changes, and work to make the 'actual state' reflect the 'expected state'.
+	Some tools include Kubernetes, Swarm, Nomad, and ECS.
+See CNCF, 'Cloud Native Computing Foundation' projects. 
